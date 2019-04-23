@@ -1,0 +1,81 @@
+#!/bin/sh
+
+# Assumes $VAULT_ADDR's root token is in $VAULT_TOKEN.
+# Auto-auth token is written to $tmpdir/agent-token.
+# Agent listens on http://localhost:8007.
+# Agent pid is in $tmpdir/agentpid.
+
+tmpdir=$1
+loglevel=$2
+policy=$3
+
+function setup_approle {
+    vault auth enable approle 2>/dev/null || true
+
+    cat - > ${tmpdir}/policy.hcl << EOF
+$policy
+
+path "/auth/token/create" {
+	capabilities = ["create", "update"]
+}
+EOF
+    vault policy write agent ${tmpdir}/policy.hcl
+
+    vault write auth/approle/role/agent-role \
+      policies=agent \
+      secret_id_ttl=10m \
+      token_ttl=10m \
+      token_max_ttl=30m
+
+    vault read -field=role_id -format=yaml auth/approle/role/agent-role/role-id > $tmpdir/role_id
+    vault write -f -field=secret_id -format=yaml auth/approle/role/agent-role/secret-id > $tmpdir/secret_id
+}
+
+function setup_agent {
+    cat - > $tmpdir/vault-agent.hcl << EOF
+    pid_file = "$tmpdir/agentpid"
+
+    auto_auth {
+        method {
+            type = "approle"
+            config = {
+                role_id_file_path = "$tmpdir/role_id"
+                secret_id_file_path = "$tmpdir/secret_id"
+            }
+        }
+        sink {
+            type = "file"
+            config = {
+                path = "$tmpdir/agent-token"
+            }
+        }
+    }
+
+    cache {
+        use_auto_auth_token = true
+    }
+
+    listener "tcp" {
+        address = "0.0.0.0:8007"
+        tls_disable = true
+    }
+EOF
+}
+
+setup_approle
+setup_agent
+
+VAULT_TOKEN= vault agent -config $tmpdir/vault-agent.hcl -log-level $loglevel &
+while ! nc -z localhost 8007; do
+  sleep 1
+  echo -n '.'
+done
+echo
+
+#function killagent {
+#  disable_approle
+#  kill $(cat $tmpdir/agentpid)
+#}
+# trap "disable_approle; killagent" EXIT
+
+

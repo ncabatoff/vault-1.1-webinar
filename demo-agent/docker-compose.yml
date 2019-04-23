@@ -1,0 +1,121 @@
+version: '2.1'
+
+services:
+
+  prometheus:
+    image: prom/prometheus:v2.9.1
+    container_name: prometheus
+    volumes:
+      - ./prometheus/:/etc/prometheus/
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    expose:
+      - 9090
+    ports:
+      - 9090:9090
+
+  node-exporter:
+    image: prom/node-exporter:v0.17.0
+    container_name: node-exporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
+    expose:
+      - 9100
+
+  grafana:
+    image: grafana/grafana:6.1.3
+    container_name: grafana
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/etc/grafana/dashboards
+    environment:
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+    expose:
+      - 3000
+    ports:
+      - 3000:3000
+
+  vault:
+    image: vault
+    container_name: vault
+    cap_add:
+      - IPC_LOCK
+    environment:
+      - VAULT_DEV_ROOT_TOKEN_ID=devroot
+      - |
+        VAULT_LOCAL_CONFIG={
+          "backend": {"file": {"path": "/vault/file"}},
+          "listener": [{"tcp": {"address": "0.0.0.0:8202", "tls_disable": true}}],
+          "telemetry": {
+            "prometheus_retention_time": "24h",
+            "disable_hostname": true
+          }
+        }
+    expose:
+      - 8202
+
+  badapp:
+    image: vault
+    container_name: badapp
+    environment:
+      - VAULT_TOKEN=devroot
+      - VAULT_ADDR=http://vault:8202
+    volumes:
+      - ./badapp:/badapp
+    entrypoint: /bin/sh
+    command:
+      - '-c'
+      - |
+        echo 'path "/auth/token/renew-self" { capabilities = ["update"] }' > policy.hcl
+        while ! vault policy write badapp policy.hcl; do sleep 1; done
+        export VAULT_TOKEN=`vault token create -policy=badapp -renewable -ttl=10m -field=token`
+        /badapp/badapp
+    expose:
+      - 8080
+
+#  badapp-agent:
+#    image: vault
+#    container_name: badapp
+#    environment:
+#      - VAULT_ADDR=http://agent:8007
+#    volumes:
+#      - ./badapp:/badapp
+#    entrypoint: /bin/sh
+#    command:
+#      - '-c'
+#      - |
+#        while ! /badapp/badapp; do sleep 1; done
+#    expose:
+#      - 8080
+#
+#  agent:
+#    image: vault
+#    container_name: agent
+#    environment:
+#      - VAULT_TOKEN=devroot
+#      - VAULT_ADDR=http://vault:8202
+#    volumes:
+#      - ./agent:/agent
+#    entrypoint: /bin/sh
+#    command:
+#      - -c
+#      - |
+#        while ! vault status; do sleep 1; done
+#        /agent/vault-agent /tmp warn '
+#          path "/auth/token/renew-self" { capabilities = ["update"] }'
+#        sleep 999999
+#    expose:
+#      - 8007
+#    ports:
+#      - 8007:8007
+
+
