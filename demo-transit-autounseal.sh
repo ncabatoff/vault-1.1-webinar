@@ -2,8 +2,7 @@
 
 set -e
 
-# tmpdir=`mktemp -d /tmp/vaultXXXXXX`
-tmpdir=/tmp/vaulttmp
+tmpdir=`mktemp -d /tmp/vaultXXXXXX`
 
 function start_primary() {
     echo "* start_primary"
